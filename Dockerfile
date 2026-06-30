@@ -42,10 +42,10 @@ USER appuser
 
 EXPOSE 8000
 
-# Model weights (~hundreds of MB) land in $HOME/.cache on first request.
-# Mount this as a persistent volume, or every fresh container re-downloads
-# them on startup.
-VOLUME ["/home/appuser/.cache"]
+# Model weights (~hundreds of MB) land in $HOME/.cache on first request, and
+# get re-downloaded on every fresh container otherwise. No Docker VOLUME
+# instruction here — attach a Railway Volume mounted at /home/appuser/.cache
+# (Settings -> Volumes on this service) for that to persist across deploys.
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
