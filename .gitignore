@@ -1,2 +1,27 @@
 swarm-audiences-frontier-runners (1).ipynb
 swarm-audiences-frontier-runners (2).ipynb
+
+# secrets - never commit, pass at runtime instead
+.env
+.env.local
+.env.*.local
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# local scratch / sample media used for manual testing
+clips/
+calib_bg/
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.wav
+*.m4a
+*.mp3
