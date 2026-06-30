@@ -30,6 +30,11 @@ LEGACY_BLOCK = float(os.environ.get("LEGACY_BLOCK", 0.85))  # legacy gate: s_a >
 
 # ---- frontrunner detector config ----
 FRONTRUNNER_DEVICE = os.environ.get("FRONTRUNNER_DEVICE", "cuda")
+# Absolute path so the weights land somewhere writable and (if that directory
+# is a mounted volume) persisted, rather than the process's CWD.
+YOLO_WEIGHTS_PATH = os.environ.get(
+    "YOLO_WEIGHTS_PATH", str(Path.home() / ".cache" / "swarm-audiences" / "yolov8n.pt")
+)
 DANGER_CLASSES = {"knife", "scissors", "baseball bat"}  # COCO danger-ish subset
 BANNED_LEXICON = ["hate", "kill", "bomb", "scam"]
 DANGER_PHRASES = [

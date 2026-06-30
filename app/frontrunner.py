@@ -45,7 +45,11 @@ def load_frontrunner(device: str = config.FRONTRUNNER_DEVICE) -> dict:
         dev = device if torch.cuda.is_available() else "cpu"
         _fr["device"] = dev
 
-        _fr["yolo"] = YOLO("yolov8n.pt")
+        # Absolute path, not a bare "yolov8n.pt" — that downloads into the
+        # process's current working directory, which isn't guaranteed to be
+        # writable (e.g. /app in the container image) or persisted.
+        os.makedirs(os.path.dirname(config.YOLO_WEIGHTS_PATH), exist_ok=True)
+        _fr["yolo"] = YOLO(config.YOLO_WEIGHTS_PATH)
 
         if dev == "cuda":
             cap = torch.cuda.get_device_capability(0)
