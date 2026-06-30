@@ -20,11 +20,11 @@ below from your own machine unless a step says "on the VM".
 
 - An Azure VM (Ubuntu 22.04/24.04 recommended) with a public IP, SSH access,
   and a Network Security Group (NSG) you can edit.
-- This repo pushed to GitHub — `.github/workflows/backend-docker-publish.yml`
-  builds `backend/Dockerfile` and publishes it to GHCR on every push to
-  `main` that touches `backend/**` (also runs as a build-only check on PRs).
-  No extra setup needed on the GitHub side; it authenticates with the
-  workflow's own `GITHUB_TOKEN`.
+- This repo (the `backend/` folder is its own git repo, with its own
+  `.github/workflows/`) pushed to GitHub — `backend-docker-publish.yml`
+  builds `Dockerfile` and publishes it to GHCR on every push to `main`
+  (also runs as a build-only check on PRs). No extra setup needed on the
+  GitHub side; it authenticates with the workflow's own `GITHUB_TOKEN`.
 - DNS access for `recruitbase.work` to add an A record.
 
 GHCR packages publish **private** by default. Either flip the package to
@@ -71,7 +71,6 @@ Don't want to wait on CI, or testing before pushing? Build and push it
 yourself the same way the workflow does:
 
 ```bash
-cd backend
 docker login ghcr.io -u <your-github-username>   # PAT with write:packages, as the password
 docker build -t ghcr.io/<your-github-username>/<repo-name>:latest .
 docker push ghcr.io/<your-github-username>/<repo-name>:latest
