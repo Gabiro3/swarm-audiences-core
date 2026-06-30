@@ -1,0 +1,43 @@
+# secrets - pass at runtime instead (env vars / --env-file / secret store)
+.env.local
+.env
+
+# vcs / editor
+.git
+.gitignore
+.idea
+.vscode
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# notebooks - not needed in the runtime image
+*.ipynb
+.ipynb_checkpoints/
+
+# local scratch / sample media
+clips/
+calib_bg/
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.wav
+*.m4a
+*.mp3
+
+# docker itself
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# misc
+*.md

@@ -1,0 +1,19 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+pydantic>=2.7
+python-dotenv>=1.0
+
+# Qwen-VL auditor calls out to Alibaba Cloud Model Studio (OpenAI-compatible
+# endpoint) — no local model weights, so no torch-side VLM deps here.
+openai>=1.40
+
+# frontrunner stack (YOLO + Whisper + CLAP) still runs locally.
+torch>=2.2
+transformers>=4.46
+ultralytics>=8.2
+faster-whisper>=1.0
+opencv-python-headless>=4.9
+librosa>=0.10
+numpy>=1.26
+faiss-cpu>=1.8
