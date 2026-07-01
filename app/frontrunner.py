@@ -123,10 +123,7 @@ def _audio_track(wav):
     import librosa
     audio_data, _ = librosa.load(wav, sr=48000)
     proc, dev = _fr["clap_proc"], _fr["device"]
-    try:  # kwarg name varies across transformers versions
-        inputs = proc(audios=audio_data, sampling_rate=48000, return_tensors="pt")
-    except TypeError:
-        inputs = proc(audio=audio_data, sampling_rate=48000, return_tensors="pt")
+    inputs = proc(audio=audio_data, sampling_rate=48000, return_tensors="pt")
     with torch.no_grad():
         out = _fr["clap_model"].get_audio_features(**inputs.to(dev))
         feats = getattr(out, "audio_embeds", None)
