@@ -67,10 +67,28 @@ def _frontrunner_context(fr: Optional[dict]) -> str:
     if not fr:
         return ""
     m = fr["metrics"]
-    return (f"\nPhase-1 signals to reconcile: visual={m['visual']:.2f}, text={m['text']:.2f}, "
-            f"audio={m['audio']:.2f}; acoustic_match='{fr.get('acoustic_match')}'; "
-            f"transcript='{fr.get('extracted_transcript', '')[:300]}'. "
-            "If audio flags a phonetic bypass that the visual context exonerates, say so.")
+    lines = [
+        "\n\n=== PHASE-1 FRONTRUNNER SIGNALS — YOU MUST RECONCILE THESE ===",
+        f"  visual_score={m['visual']:.2f}  text_score={m['text']:.2f}  audio_score={m['audio']:.2f}",
+    ]
+    acoustic = fr.get("acoustic_match") or ""
+    if acoustic and acoustic.lower() not in ("none", ""):
+        lines.append(f"  acoustic_match: \"{acoustic}\"")
+    transcript = (fr.get("extracted_transcript") or "").strip()
+    if transcript:
+        lines.append(f"  transcript: \"{transcript[:500]}\"")
+    lines += [
+        "",
+        "CRITICAL RULES:",
+        "1. If acoustic_match or transcript indicates self-harm, distress cries, threats, or abuse,",
+        "   that IS a violation even when individual track scores are below 0.5.",
+        "   Map it to Dangerous-Activities (self-harm/distress) or Hate/Harassment as appropriate.",
+        "2. Do NOT default to SAFE simply because the visual frames look innocuous.",
+        "   Audio and speech are primary harm vectors for this content type.",
+        "3. If video/text/audio scores are COLLECTIVELY elevated (sum > 0.8), escalate to VIOLATION.",
+        "=== END FRONTRUNNER SIGNALS ===",
+    ]
+    return "\n".join(lines)
 
 
 def _parse(raw: str) -> dict:
@@ -101,20 +119,30 @@ def deep_audit(
     max_new_tokens: int = config.QWEN_MAX_NEW_TOKENS,
 ) -> dict:
     ctx = _frontrunner_context(frontrunner)
+    frames: list[str] = []
     if has_video_stream(video_path):
         frames = sample_frames_base64(
             video_path, target_fps=fps, max_frames=max_frames, jpeg_quality=config.QWEN_JPEG_QUALITY
         )
-        prompt = (f"You are the final arbiter in a content-moderation pipeline. {policy}\n"
-                  f"Watch the clip (sampled frames below, in order), then judge it.{ctx}\n{SCHEMA_HINT}")
+
+    if frames:
+        prompt = (
+            f"You are the final arbiter in a content-moderation pipeline. {policy}\n"
+            f"Evaluate the sampled video frames AND the phase-1 signals below together.{ctx}\n\n"
+            f"{SCHEMA_HINT}"
+        )
         content = [
             {"type": "video", "video": frames, "fps": fps},
             {"type": "text", "text": prompt},
         ]
     else:
-        # audio-only: no frames to sample, judge from transcript + acoustic match.
-        prompt = (f"You are the final arbiter in a content-moderation pipeline. {policy}\n"
-                  f"There are no video frames. Judge from the transcript and acoustic signals only.{ctx}\n{SCHEMA_HINT}")
+        # No frames decoded (audio-only file, AV1 decode failure, etc.)
+        # Judge purely from transcript and acoustic match — these are sufficient.
+        prompt = (
+            f"You are the final arbiter in a content-moderation pipeline. {policy}\n"
+            f"No video frames are available. Judge from transcript and acoustic signals only.{ctx}\n\n"
+            f"{SCHEMA_HINT}"
+        )
         content = [{"type": "text", "text": prompt}]
 
     raw = _generate([{"role": "user", "content": content}], max_new_tokens)
