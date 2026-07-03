@@ -3,11 +3,12 @@
 frontrunner (cheap filters) -> router -> Qwen-VL gray-zone auditor -> unified verdict.
 
 Endpoints:
-  GET  /health         readiness of the frontrunner stack / Qwen-VL client / calibrator
-  POST /v1/triage       phase-1 only: cheap multi-modal triage for a video/audio clip
-  POST /v1/audit        phase-2 only: Qwen-VL deep audit (optionally given frontrunner context)
-  POST /v1/moderate      full pipeline: triage, escalate to deep audit if needed, final verdict
-  POST /v1/calibrate     fit the per-track score calibrator on a batch of background clips
+  GET  /health               readiness of the frontrunner stack / Qwen-VL client / calibrator
+  POST /v1/triage            submit a phase-1 triage job; returns {job_id} immediately
+  POST /v1/audit             submit a phase-2 Qwen-VL audit job; returns {job_id} immediately
+  POST /v1/moderate          submit a full pipeline job; returns {job_id} immediately
+  GET  /v1/jobs/{job_id}     poll a job — status: pending | running | done | error
+  POST /v1/calibrate         fit the per-track score calibrator on a batch of background clips
 
 Every moderation endpoint accepts the clip as EITHER a multipart file upload
 ("file") OR a hosted URL ("video_url" form field) — not both.
@@ -17,13 +18,14 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import auditor, config, frontrunner, ingest, orchestrator, schemas
+from . import auditor, config, frontrunner, ingest, jobs, orchestrator, schemas
 
 logger = logging.getLogger("swarm_audiences")
 
@@ -93,8 +95,29 @@ def _resolve_media(file: Optional[UploadFile], video_url: Optional[str]) -> str:
 def _cleanup(*paths: str) -> None:
     for path in paths:
         if path and os.path.exists(path):
-            os.remove(path)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
+
+def _run_job(job_id: str, fn, *args) -> None:
+    """Background thread entry point: set_running → fn(*args) → set_done/error."""
+    jobs.set_running(job_id)
+    try:
+        result = fn(*args)
+        # Pydantic models → dict so they're JSON-serialisable in the job store
+        if hasattr(result, "model_dump"):
+            result = result.model_dump()
+        jobs.set_done(job_id, result)
+    except Exception as exc:
+        logger.exception("job %s failed", job_id)
+        jobs.set_error(job_id, str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
 
 @app.get("/health", response_model=schemas.HealthStatus)
 def health():
@@ -106,20 +129,43 @@ def health():
     )
 
 
-@app.post("/v1/triage", response_model=schemas.TriageResult)
+# ---------------------------------------------------------------------------
+# Job polling
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/jobs/{job_id}")
+def get_job(job_id: str):
+    """Poll a previously submitted moderation job."""
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, f"Job '{job_id}' not found or has expired (TTL={jobs.JOB_TTL}s)")
+    return job
+
+
+# ---------------------------------------------------------------------------
+# Moderation endpoints — all return {job_id, status:"pending"} immediately
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/triage")
 def triage_endpoint(
     file: Optional[UploadFile] = File(None),
     video_url: Optional[str] = Form(None),
 ):
-    """Phase-1 triage only: cheap visual/text/audio filters, no VLM call."""
+    """Submit a phase-1 triage job. Poll GET /v1/jobs/{job_id} for the result."""
     path = _resolve_media(file, video_url)
-    try:
-        return frontrunner.frontrunner_triage(path)
-    finally:
-        _cleanup(path)
+    job_id = jobs.create("triage")
+
+    def run():
+        try:
+            _run_job(job_id, frontrunner.frontrunner_triage, path)
+        finally:
+            _cleanup(path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "status": "pending"}
 
 
-@app.post("/v1/audit", response_model=schemas.AuditResult)
+@app.post("/v1/audit")
 def audit_endpoint(
     file: Optional[UploadFile] = File(None),
     video_url: Optional[str] = Form(None),
@@ -127,7 +173,7 @@ def audit_endpoint(
         None, description="Optional JSON-encoded frontrunner triage result to reconcile against."
     ),
 ):
-    """Phase-2 deep audit only: runs Qwen-VL directly on the clip."""
+    """Submit a phase-2 Qwen-VL audit job. Poll GET /v1/jobs/{job_id} for the result."""
     fr_ctx = None
     if frontrunner_context:
         try:
@@ -136,33 +182,44 @@ def audit_endpoint(
             raise HTTPException(400, "frontrunner_context must be valid JSON")
 
     path = _resolve_media(file, video_url)
-    try:
-        return auditor.deep_audit(path, fr_ctx)
-    finally:
-        _cleanup(path)
+    job_id = jobs.create("audit")
+
+    def run():
+        try:
+            _run_job(job_id, auditor.deep_audit, path, fr_ctx)
+        finally:
+            _cleanup(path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "status": "pending"}
 
 
-@app.post("/v1/moderate", response_model=schemas.ModerationResult)
+@app.post("/v1/moderate")
 def moderate_endpoint(
     file: Optional[UploadFile] = File(None),
     video_url: Optional[str] = Form(None),
 ):
-    """Full pipeline: triage, escalate to deep audit only if gray-zone, unified verdict."""
+    """Submit a full pipeline job (triage + escalation). Poll GET /v1/jobs/{job_id} for the result."""
     path = _resolve_media(file, video_url)
-    try:
-        return orchestrator.moderate(path)
-    finally:
-        _cleanup(path)
+    job_id = jobs.create("moderate")
 
+    def run():
+        try:
+            _run_job(job_id, orchestrator.moderate, path)
+        finally:
+            _cleanup(path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "status": "pending"}
+
+
+# ---------------------------------------------------------------------------
+# Calibration (kept synchronous — admin/batch operation, not user-facing)
+# ---------------------------------------------------------------------------
 
 @app.post("/v1/calibrate", response_model=schemas.CalibrationReport)
 def calibrate_endpoint(files: List[UploadFile] = File(...)):
-    """Fit the per-track score calibrator on a batch of background clips.
-
-    Pass a held-out set of known-benign clips — never the clips you're about
-    to judge. Below MIN_CALIB_SAMPLES the fit is refused and routing stays on
-    raw (uncalibrated) scores, which is the safe fallback.
-    """
+    """Fit the per-track score calibrator on a batch of background clips."""
     paths = [_save_upload(f) for f in files]
     try:
         calibrator, rows, errors = frontrunner.fit_calibration(paths)
