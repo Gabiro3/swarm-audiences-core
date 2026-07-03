@@ -16,7 +16,7 @@ import re
 import threading
 from typing import Optional
 
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 from . import config
 from .media import has_video_stream, sample_frames_base64
@@ -110,6 +110,24 @@ def _generate(messages: list, max_new_tokens: int) -> str:
     return completion.choices[0].message.content or ""
 
 
+def _is_inspection_failed(exc: BadRequestError) -> bool:
+    """DashScope rejects frames it deems inappropriate before Qwen even runs."""
+    try:
+        body = exc.response.json()
+        return body.get("error", {}).get("code") == "data_inspection_failed"
+    except Exception:
+        return "data_inspection_failed" in str(exc)
+
+
+def _text_only_prompt(policy: str, ctx: str, reason: str) -> list[dict]:
+    prompt = (
+        f"You are the final arbiter in a content-moderation pipeline. {policy}\n"
+        f"{reason} Judge from transcript and acoustic signals only.{ctx}\n\n"
+        f"{SCHEMA_HINT}"
+    )
+    return [{"type": "text", "text": prompt}]
+
+
 def deep_audit(
     video_path: str,
     frontrunner: Optional[dict] = None,
@@ -135,15 +153,22 @@ def deep_audit(
             {"type": "video", "video": frames, "fps": fps},
             {"type": "text", "text": prompt},
         ]
+        try:
+            raw = _generate([{"role": "user", "content": content}], max_new_tokens)
+            return _parse(raw)
+        except BadRequestError as exc:
+            if not _is_inspection_failed(exc):
+                raise
+            # DashScope's input filter blocked the frames — this itself is a
+            # signal the visual content is sensitive. Fall through to text-only
+            # so Qwen can still reason from transcript + acoustic match.
+            content = _text_only_prompt(
+                policy, ctx,
+                "Video frames were blocked by the upstream content filter (data_inspection_failed)."
+            )
     else:
-        # No frames decoded (audio-only file, AV1 decode failure, etc.)
-        # Judge purely from transcript and acoustic match — these are sufficient.
-        prompt = (
-            f"You are the final arbiter in a content-moderation pipeline. {policy}\n"
-            f"No video frames are available. Judge from transcript and acoustic signals only.{ctx}\n\n"
-            f"{SCHEMA_HINT}"
-        )
-        content = [{"type": "text", "text": prompt}]
+        # No frames (audio-only, AV1 decode failure, etc.)
+        content = _text_only_prompt(policy, ctx, "No video frames are available.")
 
     raw = _generate([{"role": "user", "content": content}], max_new_tokens)
     return _parse(raw)
