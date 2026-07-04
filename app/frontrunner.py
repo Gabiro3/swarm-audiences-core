@@ -92,29 +92,62 @@ def _extract_audio(video_path: str):
     return None
 
 
-def _visual_track(video_path: str) -> float:
-    if not has_video_stream(video_path):  # audio-only files have no frames
-        return 0.0
-    # c_v = max confidence among DANGER-class detections only (not any COCO object).
-    results = _fr["yolo"].predict(source=video_path, vid_stride=30, verbose=False)
+def _visual_track(video_path: str) -> tuple:
+    """Returns (max_danger_score, detections_list).
+
+    Each detection: {object, confidence, timestamp_s}.
+    """
+    if not has_video_stream(video_path):
+        return 0.0, []
+    import cv2 as _cv2
+    cap = _cv2.VideoCapture(video_path)
+    src_fps = cap.get(_cv2.CAP_PROP_FPS) or 30.0
+    cap.release()
+
+    vid_stride = 30
+    results = _fr["yolo"].predict(source=video_path, vid_stride=vid_stride, verbose=False)
     c_v = 0.0
-    for r in results:
+    detections = []
+    for result_idx, r in enumerate(results):
         if r.boxes is None:
             continue
+        ts = round((result_idx * vid_stride) / src_fps, 2)
         for cls_id, conf in zip(r.boxes.cls.tolist(), r.boxes.conf.tolist()):
-            if r.names[int(cls_id)] in config.DANGER_CLASSES:
+            name = r.names[int(cls_id)]
+            if name in config.DANGER_CLASSES:
                 c_v = max(c_v, float(conf))
-    return c_v
+                detections.append({
+                    "object": name,
+                    "confidence": round(float(conf), 3),
+                    "timestamp_s": ts,
+                })
+    return c_v, detections
 
 
-def _text_track(wav):
+def _text_track(wav) -> tuple:
+    """Returns (score, full_transcript, flagged_segments).
+
+    Each flagged segment: {word, start_s, end_s, text}.
+    """
     if not wav:
-        return 0.0, ""
-    segments, _ = _fr["whisper"].transcribe(wav, beam_size=5)
-    transcript = " ".join(seg.text for seg in segments).lower()
-    # word-boundary match so "skills" doesn't trip "kill"
-    hits = sum(1 for w in config.BANNED_LEXICON if re.search(rf"\b{re.escape(w)}\b", transcript))
-    return min(1.0, hits * 0.25), transcript
+        return 0.0, "", []
+    # Collect generator into list so we can iterate twice (transcript + flagging).
+    segments_gen, _ = _fr["whisper"].transcribe(wav, beam_size=5)
+    all_segs = list(segments_gen)
+    transcript = " ".join(seg.text for seg in all_segs).lower()
+    flagged = []
+    for seg in all_segs:
+        seg_lower = seg.text.lower()
+        for w in config.BANNED_LEXICON:
+            if re.search(rf"\b{re.escape(w)}\b", seg_lower):
+                flagged.append({
+                    "word": w,
+                    "start_s": round(float(seg.start), 2),
+                    "end_s": round(float(seg.end), 2),
+                    "text": seg.text.strip(),
+                })
+    hits = len({f["word"] for f in flagged})  # unique banned words
+    return min(1.0, hits * 0.25), transcript, flagged
 
 
 def _audio_track(wav):
@@ -173,8 +206,8 @@ def _raw_tracks(video_path: str) -> dict:
     wav = _extract_audio(video_path)
     has_audio = wav is not None
     try:
-        c_v = _visual_track(video_path)
-        c_t, transcript = _text_track(wav)
+        c_v, detections = _visual_track(video_path)
+        c_t, transcript, flagged_segments = _text_track(wav)
         c_a, matched = _audio_track(wav)
     finally:
         if wav and os.path.exists(wav):
@@ -182,6 +215,8 @@ def _raw_tracks(video_path: str) -> dict:
     return {
         "visual": c_v, "text": c_t, "audio": c_a,
         "transcript": transcript, "acoustic_match": matched, "has_audio": has_audio,
+        "visual_detections": detections,
+        "text_flagged_segments": flagged_segments,
     }
 
 
@@ -289,4 +324,6 @@ def frontrunner_triage(video_path: str) -> dict:
         "acoustic_match": rt["acoustic_match"],
         "extracted_transcript": rt["transcript"],
         "has_audio": rt["has_audio"],
+        "visual_detections": rt["visual_detections"],
+        "text_flagged_segments": rt["text_flagged_segments"],
     }

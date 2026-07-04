@@ -20,6 +20,8 @@ class TriageResult(BaseModel):
     acoustic_match: str
     extracted_transcript: str
     has_audio: bool
+    visual_detections: list = []
+    text_flagged_segments: list = []
 
 
 class AuditResult(BaseModel):
