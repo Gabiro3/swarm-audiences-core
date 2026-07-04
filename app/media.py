@@ -9,6 +9,49 @@ import tempfile
 import cv2
 
 
+def ensure_opencv_compatible(path: str) -> tuple[str, bool]:
+    """Return a path OpenCV can decode, transcoding to H.264 via ffmpeg if needed.
+
+    AV1-encoded videos fail in OpenCV because it relies on platform hardware
+    decoders for AV1 which are absent on most VMs. ffmpeg ships software decoders
+    (libaom-av1 / dav1d) that handle it fine. We try one OpenCV read; if it fails
+    we transcode to a temp H.264 MP4 and return that instead.
+
+    Returns (path_to_use, created_temp_file). The caller must delete the temp file
+    when done if created_temp_file is True.
+    """
+    cap = cv2.VideoCapture(path)
+    readable = False
+    try:
+        ok, _ = cap.read()
+        readable = bool(ok)
+    except Exception:
+        pass
+    finally:
+        cap.release()
+
+    if readable:
+        return path, False
+
+    # Transcode to H.264 — ultrafast preset, no audio needed for visual analysis
+    fd, tmp = tempfile.mkstemp(suffix=".mp4", prefix="swarm_h264_")
+    os.close(fd)
+    r = subprocess.run(
+        ["ffmpeg", "-i", path,
+         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+         "-an", "-y", tmp],
+        capture_output=True, timeout=180,
+    )
+    if r.returncode == 0 and os.path.getsize(tmp) > 1024:
+        return tmp, True
+    # Transcode failed — return original and let the caller deal with the error
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    return path, False
+
+
 def has_video_stream(path: str) -> bool:
     """ffprobe is the authoritative check — handles AV1/HEVC/VP9 that OpenCV may reject."""
     try:

@@ -26,7 +26,7 @@ from transformers import AutoProcessor, AutoModel
 
 from . import config
 from .locks import inference_lock
-from .media import has_video_stream
+from .media import ensure_opencv_compatible, has_video_stream
 
 _fr: dict = {}
 _load_lock = threading.Lock()
@@ -96,32 +96,42 @@ def _visual_track(video_path: str) -> tuple:
     """Returns (max_danger_score, detections_list).
 
     Each detection: {object, confidence, timestamp_s}.
+    AV1 videos are transcoded to H.264 via ffmpeg before passing to YOLO,
+    because YOLO uses OpenCV internally which can't hardware-decode AV1 on
+    most VMs. stream=True prevents result accumulation in RAM for long clips.
     """
     if not has_video_stream(video_path):
         return 0.0, []
-    import cv2 as _cv2
-    cap = _cv2.VideoCapture(video_path)
-    src_fps = cap.get(_cv2.CAP_PROP_FPS) or 30.0
-    cap.release()
 
-    vid_stride = 30
-    results = _fr["yolo"].predict(source=video_path, vid_stride=vid_stride, verbose=False)
-    c_v = 0.0
-    detections = []
-    for result_idx, r in enumerate(results):
-        if r.boxes is None:
-            continue
-        ts = round((result_idx * vid_stride) / src_fps, 2)
-        for cls_id, conf in zip(r.boxes.cls.tolist(), r.boxes.conf.tolist()):
-            name = r.names[int(cls_id)]
-            if name in config.DANGER_CLASSES:
-                c_v = max(c_v, float(conf))
-                detections.append({
-                    "object": name,
-                    "confidence": round(float(conf), 3),
-                    "timestamp_s": ts,
-                })
-    return c_v, detections
+    yolo_path, tmp_created = ensure_opencv_compatible(video_path)
+    try:
+        import cv2 as _cv2
+        cap = _cv2.VideoCapture(yolo_path)
+        src_fps = cap.get(_cv2.CAP_PROP_FPS) or 30.0
+        cap.release()
+
+        vid_stride = 30
+        c_v = 0.0
+        detections = []
+        for result_idx, r in enumerate(
+            _fr["yolo"].predict(source=yolo_path, vid_stride=vid_stride, verbose=False, stream=True)
+        ):
+            if r.boxes is None:
+                continue
+            ts = round((result_idx * vid_stride) / src_fps, 2)
+            for cls_id, conf in zip(r.boxes.cls.tolist(), r.boxes.conf.tolist()):
+                name = r.names[int(cls_id)]
+                if name in config.DANGER_CLASSES:
+                    c_v = max(c_v, float(conf))
+                    detections.append({
+                        "object": name,
+                        "confidence": round(float(conf), 3),
+                        "timestamp_s": ts,
+                    })
+        return c_v, detections
+    finally:
+        if tmp_created and os.path.exists(yolo_path):
+            os.remove(yolo_path)
 
 
 def _text_track(wav) -> tuple:
