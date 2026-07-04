@@ -176,7 +176,15 @@ def _audio_track(wav):
         emb = feats.cpu().numpy().astype("float32")
     dist, ind = _fr["faiss"].search(emb, k=1)
     c_a = max(0.0, float(dist[0][0]))  # clamp: cosine can be negative, keep score in [0,1]
-    return c_a, config.DANGER_PHRASES[int(ind[0][0])]
+    # Only report a match when similarity exceeds the threshold.
+    # FAISS always returns k=1 regardless of similarity, so without this a
+    # harmless video's acoustic_match would still show the "closest" danger phrase.
+    matched = (
+        config.DANGER_PHRASES[int(ind[0][0])]
+        if c_a >= config.ACOUSTIC_MATCH_THRESHOLD
+        else "no significant acoustic match"
+    )
+    return c_a, matched
 
 
 def _route(gate_tracks, raw_tracks):

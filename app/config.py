@@ -37,6 +37,10 @@ YOLO_WEIGHTS_PATH = os.environ.get(
 )
 DANGER_CLASSES = {"knife", "scissors", "baseball bat"}  # COCO danger-ish subset
 BANNED_LEXICON = ["hate", "kill", "bomb", "scam"]
+# Minimum cosine similarity for CLAP/FAISS to count as a meaningful acoustic match.
+# FAISS IndexFlatIP always returns k=1 even for totally dissimilar audio, so without
+# this threshold a harmless video would still show the "closest" danger phrase.
+ACOUSTIC_MATCH_THRESHOLD = float(os.environ.get("ACOUSTIC_MATCH_THRESHOLD", 0.25))
 DANGER_PHRASES = [
     "someone aggressively shouting the f-word slur",
     "phonetic evasion of a curse word, screaming f u",

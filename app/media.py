@@ -9,17 +9,44 @@ import tempfile
 import cv2
 
 
+# Codecs OpenCV can decode without hardware acceleration on a plain Linux VM.
+# Anything not in this set gets transcoded to H.264 before being handed to
+# OpenCV / YOLO — avoids the noisy libav AV1/HEVC stderr spam.
+_OPENCV_SAFE_CODECS = frozenset({
+    "h264", "avc", "avc1",
+    "vp8",
+    "mpeg4", "mp4v",
+    "mpeg2video",
+    "mjpeg",
+    "theora",
+    "wmv3", "wmv2",
+})
+
+
 def ensure_opencv_compatible(path: str) -> tuple[str, bool]:
     """Return a path OpenCV can decode, transcoding to H.264 via ffmpeg if needed.
 
-    AV1-encoded videos fail in OpenCV because it relies on platform hardware
-    decoders for AV1 which are absent on most VMs. ffmpeg ships software decoders
-    (libaom-av1 / dav1d) that handle it fine. We try one OpenCV read; if it fails
-    we transcode to a temp H.264 MP4 and return that instead.
+    Uses ffprobe to check the codec *before* attempting OpenCV — avoids the
+    noisy 'Your platform doesn't support hardware accelerated AV1 decoding'
+    stderr spam that libav emits when OpenCV probes an AV1/HEVC file.
 
-    Returns (path_to_use, created_temp_file). The caller must delete the temp file
-    when done if created_temp_file is True.
+    Returns (path_to_use, created_temp_file). The caller must delete the temp
+    file when done if created_temp_file is True.
     """
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=15,
+        )
+        codec = r.stdout.strip().lower()
+        if codec and codec not in _OPENCV_SAFE_CODECS:
+            # AV1, HEVC, VP9, etc. — transcode silently, skip the noisy probe
+            return _transcode_to_h264(path)
+    except Exception:
+        pass
+
+    # Codec is safe (or ffprobe failed) — quick sanity read
     cap = cv2.VideoCapture(path)
     readable = False
     try:
@@ -32,8 +59,10 @@ def ensure_opencv_compatible(path: str) -> tuple[str, bool]:
 
     if readable:
         return path, False
+    return _transcode_to_h264(path)
 
-    # Transcode to H.264 — ultrafast preset, no audio needed for visual analysis
+
+def _transcode_to_h264(path: str) -> tuple[str, bool]:
     fd, tmp = tempfile.mkstemp(suffix=".mp4", prefix="swarm_h264_")
     os.close(fd)
     r = subprocess.run(
@@ -44,7 +73,6 @@ def ensure_opencv_compatible(path: str) -> tuple[str, bool]:
     )
     if r.returncode == 0 and os.path.getsize(tmp) > 1024:
         return tmp, True
-    # Transcode failed — return original and let the caller deal with the error
     try:
         os.remove(tmp)
     except OSError:
