@@ -96,9 +96,10 @@ def _visual_track(video_path: str) -> tuple:
     """Returns (max_danger_score, detections_list).
 
     Each detection: {object, confidence, timestamp_s}.
-    AV1 videos are transcoded to H.264 via ffmpeg before passing to YOLO,
-    because YOLO uses OpenCV internally which can't hardware-decode AV1 on
-    most VMs. stream=True prevents result accumulation in RAM for long clips.
+    AV1 videos are transcoded to H.264 via system ffmpeg before passing to
+    YOLO. YOLO uses the OpenCV pip wheel internally, whose bundled FFmpeg is
+    compiled without dav1d/libaom-av1, so AV1 has no software decoder at all.
+    stream=True prevents result accumulation in RAM for long clips.
     """
     if not has_video_stream(video_path):
         return 0.0, []

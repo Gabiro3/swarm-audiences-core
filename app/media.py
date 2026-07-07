@@ -9,9 +9,11 @@ import tempfile
 import cv2
 
 
-# Codecs OpenCV can decode without hardware acceleration on a plain Linux VM.
-# Anything not in this set gets transcoded to H.264 before being handed to
-# OpenCV / YOLO — avoids the noisy libav AV1/HEVC stderr spam.
+# Codecs the OpenCV pip wheel can software-decode on a plain Linux VM.
+# The wheel bundles its own FFmpeg compiled without dav1d/libaom-av1/libde265,
+# so AV1/HEVC simply have no decoder available — not a missing hardware path.
+# System ffmpeg (apt) does include those decoders, so we transcode through it
+# before handing anything to OpenCV / YOLO.
 _OPENCV_SAFE_CODECS = frozenset({
     "h264", "avc", "avc1",
     "vp8",
@@ -26,9 +28,10 @@ _OPENCV_SAFE_CODECS = frozenset({
 def ensure_opencv_compatible(path: str) -> tuple[str, bool]:
     """Return a path OpenCV can decode, transcoding to H.264 via ffmpeg if needed.
 
-    Uses ffprobe to check the codec *before* attempting OpenCV — avoids the
-    noisy 'Your platform doesn't support hardware accelerated AV1 decoding'
-    stderr spam that libav emits when OpenCV probes an AV1/HEVC file.
+    Uses ffprobe to check the codec *before* attempting OpenCV — the pip wheel's
+    bundled FFmpeg has no AV1/HEVC software decoder (no dav1d/libaom-av1), so
+    probing with cv2.VideoCapture on those files fails silently or emits libav
+    stderr. System ffmpeg transcodes them to H.264 first.
 
     Returns (path_to_use, created_temp_file). The caller must delete the temp
     file when done if created_temp_file is True.
