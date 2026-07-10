@@ -12,6 +12,7 @@ openai>=1.40
 torch>=2.2
 transformers>=4.46
 ultralytics>=8.2
+supervision>=0.24
 faster-whisper>=1.0
 opencv-python-headless>=4.9
 librosa>=0.10

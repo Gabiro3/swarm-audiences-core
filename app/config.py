@@ -37,6 +37,13 @@ YOLO_WEIGHTS_PATH = os.environ.get(
 )
 DANGER_CLASSES = {"knife", "scissors", "baseball bat"}  # COCO danger-ish subset
 BANNED_LEXICON = ["hate", "kill", "bomb", "scam"]
+
+# ---- supervision-annotated frame export (all-object visibility, not just DANGER_CLASSES) ----
+# Every sampled frame that has at least one YOLO detection gets an annotated JPEG
+# (drawn with the `supervision` library) returned in the triage response, capped
+# at this many frames so payloads stay bounded on long clips.
+ANNOTATION_MAX_FRAMES = int(os.environ.get("ANNOTATION_MAX_FRAMES", 12))
+ANNOTATION_JPEG_QUALITY = int(os.environ.get("ANNOTATION_JPEG_QUALITY", 80))
 # Minimum cosine similarity for CLAP/FAISS to count as a meaningful acoustic match.
 # FAISS IndexFlatIP always returns k=1 even for totally dissimilar audio, so without
 # this threshold a harmless video would still show the "closest" danger phrase.

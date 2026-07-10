@@ -106,3 +106,25 @@ or `awk -F, '{print $2}' results.csv` (the `video_id` column) to build an
 exclude-list and filter it into your manifest before re-running. Kept out of
 the script itself to avoid growing a bespoke checkpoint format when a shell
 one-liner does the job for a benchmarking tool.
+
+
+# 1. Pull the new image
+docker pull ghcr.io/OWNER/REPO:latest
+
+# 2. Find the running container name/ID
+docker ps
+
+# 3. Stop it
+docker stop <container_name>
+
+# 4. Remove it
+docker rm <container_name>
+
+# 5. Run the new image
+docker run -d \
+  --name swarm-backend \
+  --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  --env-file /opt/swarm-audiences/.env \
+  -v swarm-model-cache:/home/appuser/.cache \
+  ghcr.io/OWNER/REPO:latest

@@ -215,6 +215,90 @@ def _ytdlp_fetch_clip(youtube_url: str, span: list, out_path: str, timeout_s: in
             os.remove(tmp_path)
 
 
+# ---------------------------------------------------------------------------
+# WebVid-10M via HuggingFace — reads the manifest CSV directly from the HF
+# hub using dask (hf:// fsspec path). Videos are referenced by contentUrl and
+# submitted to the API by URL — no local download required.
+# Requires: huggingface-hub, dask[dataframe], pyarrow, fsspec
+# ---------------------------------------------------------------------------
+
+def iter_webvid_hf(split: str = "train", source: str = "webvid_hf") -> Iterator[ClipRef]:
+    import dask.dataframe as dd  # noqa: PLC0415
+
+    _SPLITS = {
+        "train": "**/train/**",
+        "validation": "data/val/partitions/0000.csv",
+    }
+    pattern = _SPLITS.get(split, split)
+    df = dd.read_csv(f"hf://datasets/TempoFunk/webvid-10M/{pattern}")
+    for partition in df.partitions:
+        rows = partition.compute()
+        for _, row in rows.iterrows():
+            video_id = str(row.get("videoid") or row.get("video_id") or "")
+            url = str(row.get("contentUrl") or row.get("content_url") or "")
+            if not video_id or not url or url == "nan":
+                continue
+            yield ClipRef(video_id=video_id, source=source, ground_truth="unlabeled", video_url=url)
+
+
+# ---------------------------------------------------------------------------
+# UCF-Crime via Kaggle — kagglehub downloads the dataset to a local cache
+# directory on first use (subsequent runs reuse the cache). The Kaggle dataset
+# at minmints/ufc-crime-full-dataset follows the official UCF-Crime
+# <Category>/<clip>.mp4 folder layout, so iter_labeled_dir handles it after
+# the download. Requires: kagglehub + Kaggle credentials in ~/.kaggle/kaggle.json
+# ---------------------------------------------------------------------------
+
+def iter_ucf_crime_kaggle(
+    dataset_slug: str = "minmints/ufc-crime-full-dataset",
+    source: str = "ucf_crime",
+) -> Iterator[ClipRef]:
+    import kagglehub  # noqa: PLC0415
+
+    local_path = kagglehub.dataset_download(dataset_slug)
+    yield from iter_labeled_dir(local_path, source=source)
+
+
+# ---------------------------------------------------------------------------
+# OpenVid-1M via HuggingFace datasets — streaming mode so only the rows being
+# yielded are fetched. Each example either has a direct URL or a 'video' field
+# with a local path (depends on the HF dataset version). Adapts to whichever
+# is present. Requires: datasets>=2.16, huggingface-hub>=0.20
+# ---------------------------------------------------------------------------
+
+def iter_openvid_hf(split: str = "train", source: str = "openvid_hf") -> Iterator[ClipRef]:
+    from datasets import load_dataset  # noqa: PLC0415
+
+    ds = load_dataset("nkp37/OpenVid-1M", split=split, streaming=True, trust_remote_code=True)
+    for i, example in enumerate(ds):
+        url = (
+            example.get("url")
+            or example.get("contentUrl")
+            or example.get("video_url")
+            or ""
+        )
+        video_path = None
+        if not url:
+            v = example.get("video")
+            if isinstance(v, dict):
+                video_path = v.get("path") or v.get("bytes")  # bytes won't be a path — skip
+                if not isinstance(video_path, str):
+                    video_path = None
+            elif isinstance(v, str):
+                video_path = v
+
+        video_id = str(example.get("video_id") or example.get("videoid") or i)
+        if not url and not video_path:
+            continue
+        yield ClipRef(
+            video_id=video_id,
+            source=source,
+            ground_truth="unlabeled",
+            video_url=url or None,
+            file_path=video_path if not url else None,
+        )
+
+
 def iter_hdvila(
     jsonl_path: str,
     clips_dir: str,

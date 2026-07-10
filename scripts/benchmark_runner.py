@@ -41,7 +41,10 @@ from dataset_adapters import (
     iter_labeled_dir,
     iter_manifest_csv,
     iter_openvid,
+    iter_openvid_hf,
+    iter_ucf_crime_kaggle,
     iter_webvid,
+    iter_webvid_hf,
     iter_xd_violence,
 )
 
@@ -138,10 +141,16 @@ def _build_dataset_iterators(args: argparse.Namespace) -> list[Iterator[ClipRef]
     for name in args.datasets:
         if name == "webvid":
             it = iter_webvid(args.webvid_csv)
+        elif name == "webvid_hf":
+            it = iter_webvid_hf(split=args.webvid_hf_split)
         elif name == "openvid":
             it = iter_openvid(args.openvid_csv, args.openvid_video_dir)
+        elif name == "openvid_hf":
+            it = iter_openvid_hf(split=args.openvid_hf_split)
         elif name == "ucf_crime":
             it = iter_labeled_dir(args.ucf_crime_dir, source="ucf_crime")
+        elif name == "ucf_crime_kaggle":
+            it = iter_ucf_crime_kaggle(dataset_slug=args.ucf_crime_kaggle_slug)
         elif name == "xd_violence":
             it = iter_xd_violence(args.xd_violence_dir)
         elif name == "hdvila":
@@ -176,7 +185,12 @@ def main() -> None:
     p.add_argument("--endpoint", default="/v1/moderate", choices=["/v1/moderate", "/v1/triage", "/v1/audit"])
     p.add_argument(
         "--datasets", nargs="+", required=True,
-        choices=["webvid", "openvid", "ucf_crime", "xd_violence", "hdvila", "manifest"],
+        choices=[
+            "webvid", "webvid_hf",
+            "openvid", "openvid_hf",
+            "ucf_crime", "ucf_crime_kaggle",
+            "xd_violence", "hdvila", "manifest",
+        ],
         help="One or more dataset adapters to pull clips from",
     )
     p.add_argument("--limit", type=int, default=None, help="Cap PER DATASET (not overall) — omit for all clips")
@@ -188,9 +202,13 @@ def main() -> None:
     p.add_argument("--shard-index", type=int, default=0, help="This process's shard, for multi-process/-machine runs")
     p.add_argument("--shard-count", type=int, default=1, help="Total number of shards (see README for parallel runs)")
 
-    p.add_argument("--webvid-csv", help="WebVid results CSV (has a contentUrl column)")
+    p.add_argument("--webvid-csv", help="WebVid results CSV (has a contentUrl column) — local file")
+    p.add_argument("--webvid-hf-split", default="train", help="HF split for webvid_hf adapter (train or validation)")
     p.add_argument("--openvid-csv", help="OpenVid-1M manifest CSV (has a video/filename column)")
     p.add_argument("--openvid-video-dir", help="Directory of already-extracted OpenVid-1M .mp4 files")
+    p.add_argument("--openvid-hf-split", default="train", help="HF split for openvid_hf adapter")
+    p.add_argument("--ucf-crime-kaggle-slug", default="minmints/ufc-crime-full-dataset",
+                   help="Kaggle dataset slug for ucf_crime_kaggle adapter")
     p.add_argument("--ucf-crime-dir", help="Root of UCF-Crime's <Category>/<clip>.mp4 layout")
     p.add_argument("--xd-violence-dir", help="Root directory of XD-Violence .mp4 files")
     p.add_argument("--hdvila-jsonl", help="HD-VILA-100M metadata JSONL (video/clip ids + spans)")
@@ -205,8 +223,10 @@ def main() -> None:
     args = p.parse_args()
 
     required = {
-        "webvid": ["webvid_csv"], "openvid": ["openvid_csv", "openvid_video_dir"],
-        "ucf_crime": ["ucf_crime_dir"], "xd_violence": ["xd_violence_dir"],
+        "webvid": ["webvid_csv"], "webvid_hf": [],
+        "openvid": ["openvid_csv", "openvid_video_dir"], "openvid_hf": [],
+        "ucf_crime": ["ucf_crime_dir"], "ucf_crime_kaggle": [],
+        "xd_violence": ["xd_violence_dir"],
         "hdvila": ["hdvila_jsonl", "hdvila_clips_dir"], "manifest": ["manifest_csv"],
     }
     for ds in args.datasets:

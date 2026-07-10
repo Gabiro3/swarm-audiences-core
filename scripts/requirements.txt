@@ -1,1 +1,9 @@
 requests>=2.31
+# HuggingFace datasets + dask for reading WebVid-10M and OpenVid-1M manifests
+# directly from the HF hub without a full local download.
+datasets>=2.16
+huggingface-hub>=0.20
+dask[dataframe]>=2024.1
+pyarrow>=14.0
+# Kaggle dataset access (downloads to a local cache dir on first use).
+kagglehub>=0.2

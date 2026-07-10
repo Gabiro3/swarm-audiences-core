@@ -8,6 +8,7 @@ with two production fixes:
   - all GPU-touching work serialized behind `locks.inference_lock`
 """
 
+import base64
 import bisect
 import math
 import os
@@ -20,6 +21,7 @@ import uuid
 import numpy as np
 import torch
 import faiss
+import supervision as sv
 from ultralytics import YOLO
 from faster_whisper import WhisperModel
 from transformers import AutoProcessor, AutoModel
@@ -93,16 +95,23 @@ def _extract_audio(video_path: str):
 
 
 def _visual_track(video_path: str) -> tuple:
-    """Returns (max_danger_score, detections_list).
+    """Returns (max_danger_score, danger_detections, all_detections, annotated_frames).
 
-    Each detection: {object, confidence, timestamp_s}.
+    danger_detections is the DANGER_CLASSES-filtered subset used for scoring
+    (unchanged behavior). all_detections is every object YOLO recognized on a
+    sampled frame, regardless of class — {object, confidence, timestamp_s} —
+    so callers can see what YOLO actually saw (e.g. "car") even when nothing
+    matched the danger allowlist. annotated_frames draws boxes/labels via
+    `supervision` on frames with at least one detection, capped at
+    config.ANNOTATION_MAX_FRAMES: {timestamp_s, image (base64 jpeg data URI)}.
+
     AV1 videos are transcoded to H.264 via system ffmpeg before passing to
     YOLO. YOLO uses the OpenCV pip wheel internally, whose bundled FFmpeg is
     compiled without dav1d/libaom-av1, so AV1 has no software decoder at all.
     stream=True prevents result accumulation in RAM for long clips.
     """
     if not has_video_stream(video_path):
-        return 0.0, []
+        return 0.0, [], [], []
 
     yolo_path, tmp_created = ensure_opencv_compatible(video_path)
     try:
@@ -112,24 +121,53 @@ def _visual_track(video_path: str) -> tuple:
         cap.release()
 
         vid_stride = 30
+        box_annotator = sv.BoxAnnotator()
+        label_annotator = sv.LabelAnnotator()
+
         c_v = 0.0
-        detections = []
+        danger_detections = []
+        all_detections = []
+        annotated_frames = []
         for result_idx, r in enumerate(
             _fr["yolo"].predict(source=yolo_path, vid_stride=vid_stride, verbose=False, stream=True)
         ):
-            if r.boxes is None:
+            if r.boxes is None or len(r.boxes) == 0:
                 continue
             ts = round((result_idx * vid_stride) / src_fps, 2)
+
             for cls_id, conf in zip(r.boxes.cls.tolist(), r.boxes.conf.tolist()):
                 name = r.names[int(cls_id)]
+                all_detections.append({
+                    "object": name,
+                    "confidence": round(float(conf), 3),
+                    "timestamp_s": ts,
+                })
                 if name in config.DANGER_CLASSES:
                     c_v = max(c_v, float(conf))
-                    detections.append({
+                    danger_detections.append({
                         "object": name,
                         "confidence": round(float(conf), 3),
                         "timestamp_s": ts,
                     })
-        return c_v, detections
+
+            if len(annotated_frames) < config.ANNOTATION_MAX_FRAMES:
+                detections = sv.Detections.from_ultralytics(r)
+                labels = [
+                    f"{r.names[int(cid)]} {conf:.2f}"
+                    for cid, conf in zip(detections.class_id, detections.confidence)
+                ]
+                scene = box_annotator.annotate(scene=r.orig_img.copy(), detections=detections)
+                scene = label_annotator.annotate(scene=scene, detections=detections, labels=labels)
+                ok, buf = _cv2.imencode(
+                    ".jpg", scene, [int(_cv2.IMWRITE_JPEG_QUALITY), config.ANNOTATION_JPEG_QUALITY]
+                )
+                if ok:
+                    annotated_frames.append({
+                        "timestamp_s": ts,
+                        "image": "data:image/jpeg;base64," + base64.b64encode(buf).decode("ascii"),
+                    })
+
+        return c_v, danger_detections, all_detections, annotated_frames
     finally:
         if tmp_created and os.path.exists(yolo_path):
             os.remove(yolo_path)
@@ -225,7 +263,7 @@ def _raw_tracks(video_path: str) -> dict:
     wav = _extract_audio(video_path)
     has_audio = wav is not None
     try:
-        c_v, detections = _visual_track(video_path)
+        c_v, detections, all_detections, annotated_frames = _visual_track(video_path)
         c_t, transcript, flagged_segments = _text_track(wav)
         c_a, matched = _audio_track(wav)
     finally:
@@ -235,6 +273,8 @@ def _raw_tracks(video_path: str) -> dict:
         "visual": c_v, "text": c_t, "audio": c_a,
         "transcript": transcript, "acoustic_match": matched, "has_audio": has_audio,
         "visual_detections": detections,
+        "all_detected_objects": all_detections,
+        "annotated_frames": annotated_frames,
         "text_flagged_segments": flagged_segments,
     }
 
@@ -344,5 +384,7 @@ def frontrunner_triage(video_path: str) -> dict:
         "extracted_transcript": rt["transcript"],
         "has_audio": rt["has_audio"],
         "visual_detections": rt["visual_detections"],
+        "all_detected_objects": rt["all_detected_objects"],
+        "annotated_frames": rt["annotated_frames"],
         "text_flagged_segments": rt["text_flagged_segments"],
     }

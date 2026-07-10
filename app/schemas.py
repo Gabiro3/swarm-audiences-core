@@ -9,6 +9,11 @@ class TrackMetrics(BaseModel):
     audio: float
 
 
+class AnnotatedFrame(BaseModel):
+    timestamp_s: float
+    image: str  # data:image/jpeg;base64,... — boxes/labels drawn via `supervision`
+
+
 class TriageResult(BaseModel):
     verdict: str
     adjusted_risk_score: float
@@ -21,6 +26,8 @@ class TriageResult(BaseModel):
     extracted_transcript: str
     has_audio: bool
     visual_detections: list = []
+    all_detected_objects: list = []
+    annotated_frames: list[AnnotatedFrame] = []
     text_flagged_segments: list = []
 
 
