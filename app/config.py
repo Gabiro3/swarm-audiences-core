@@ -35,7 +35,7 @@ FRONTRUNNER_DEVICE = os.environ.get("FRONTRUNNER_DEVICE", "cuda")
 YOLO_WEIGHTS_PATH = os.environ.get(
     "YOLO_WEIGHTS_PATH", str(Path.home() / ".cache" / "swarm-audiences" / "yolov8n.pt")
 )
-DANGER_CLASSES = {"knife", "scissors", "baseball bat"}  # COCO danger-ish subset
+DANGER_CLASSES = {"knife", "scissors", "baseball bat", "car", "truck", "gun", "bomb"}  # COCO danger-ish subset
 BANNED_LEXICON = ["hate", "kill", "bomb", "scam"]
 
 # ---- supervision-annotated frame export (all-object visibility, not just DANGER_CLASSES) ----
